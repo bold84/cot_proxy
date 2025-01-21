@@ -1,6 +1,6 @@
-# Chain-of-Thought Model Proxy
+# OpenAI API Reverse Proxy
 
-A lightweight proxy for filtering `<think>` tags from any OpenAI-compatible API endpoint. Designed for chain-of-thought language models that expose their reasoning process through think tags.
+A lightweight Dockerized reverse proxy for OpenAI's API endpoints with streaming response support.
 
 ## Features
 
@@ -35,9 +35,9 @@ curl http://localhost:5000/health
 # Test streaming chat completion
 curl http://localhost:5000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_API_KEY" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{
-    "model": "your-model-name",
+    "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello!"}],
     "stream": true
   }'
@@ -48,9 +48,9 @@ curl http://localhost:5000/v1/chat/completions \
 # Test regular chat completion
 curl http://localhost:5000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_API_KEY" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{
-    "model": "your-model-name",
+    "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -83,16 +83,16 @@ Error responses include:
 - 504: Connection timeouts
 - Original error codes from target API (401, 403, etc.)
 
-### Test with Different Model Server
+### Test with Different Target
 ```bash
-# Test with custom model endpoint
-docker run -e ENV_TARGET_BASE_URL="http://your-model-server:8080/" -p 5000:5000 cot-proxy
+# Test with custom API endpoint
+docker run -e ENV_TARGET_BASE_URL="http://your-api:8080/" -p 5000:5000 openai-proxy
 
 curl http://localhost:5000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_API_KEY" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{
-    "model": "your-model-name",
+    "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
