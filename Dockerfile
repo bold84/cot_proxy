@@ -21,4 +21,4 @@ EXPOSE 5000
 ENV DEBUG=false
 
 # Run with Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "${API_REQUEST_TIMEOUT:-3000}", "--access-logfile", "-", "--error-logfile", "-", "cot_proxy:app"]
+CMD gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout ${API_REQUEST_TIMEOUT:-3000} --access-logfile - --error-logfile - cot_proxy:app
