@@ -131,8 +131,7 @@ docker run \
 
 The service uses Gunicorn with the following settings:
 - 4 worker processes
-- 120 second timeout for long-running requests
-- 30 second connection timeout for API calls
+- 3000 second timeout for long-running requests
 - SSL verification enabled
 - Automatic error recovery
 - Health check endpoint for monitoring

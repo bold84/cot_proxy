@@ -6,8 +6,9 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - ENV_TARGET_BASE_URL=http://your-model-server:8080/
+      - TARGET_BASE_URL=http://your-model-server:8080/
       - DEBUG=false
+      - API_REQUEST_TIMEOUT=3000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s

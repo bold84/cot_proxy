@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configure target URL
-TARGET_BASE_URL = os.getenv('ENV_TARGET_BASE_URL', 'https://api.openai.com/v1/')
+TARGET_BASE_URL = os.getenv('TARGET_BASE_URL', 'https://api.openai.com/v1/')
 if not TARGET_BASE_URL.endswith('/'):
     TARGET_BASE_URL += '/'  # Ensure trailing slash for urljoin
 
@@ -83,7 +83,7 @@ def proxy(path):
                 headers=headers,
                 json=json_body,
                 stream=True,
-                timeout=30,  # 30 second timeout
+                timeout=int(os.getenv('API_REQUEST_TIMEOUT', 120)),  # Timeout in seconds, default 120
                 verify=True  # Verify SSL certificates
             )
             logger.debug(f"Connected to target URL: {target_url}")
