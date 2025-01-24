@@ -75,6 +75,37 @@ def proxy(path):
         json_body = request.get_json(silent=True) if request.is_json else None
         logger.debug(f"Request JSON body: {json_body}")
         
+        # Apply model-specific LLM parameter overrides from environment
+        if json_body and (llm_params := os.getenv('LLM_PARAMS')):
+            # Parse model configurations: "model=MODEL1,param1=val1,param2=val2;model=MODEL2,param3=val3"
+            model_configs = {}
+            for model_entry in llm_params.split(';'):
+                model_entry = model_entry.strip()
+                if not model_entry or not model_entry.startswith('model='):
+                    continue
+                
+                # Split into model declaration and parameters
+                parts = model_entry.split(',')
+                model_name = parts[0].split('=', 1)[1].strip()
+                model_configs[model_name] = {}
+                
+                # Process parameters after model declaration
+                for param in parts[1:]:
+                    param = param.strip()
+                    if '=' in param:
+                        key, value = param.split('=', 1)
+                        model_configs[model_name][key.strip()] = value.strip()
+            
+            # Get target model from request
+            target_model = json_body.get('model')
+            if target_model and target_model in model_configs:
+                logger.debug(f"Applying parameters for model: {target_model}")
+                for key, value in model_configs[target_model].items():
+                    json_body[key] = value
+                    logger.debug(f"Overriding parameter: {key} = {value}")
+            elif target_model:
+                logger.debug(f"No configuration found for model: {target_model}")
+        
         # Try to connect with a timeout
         try:
             api_response = requests.request(

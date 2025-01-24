@@ -7,6 +7,7 @@ A lightweight Dockerized reverse proxy for OpenAI's API endpoints with streaming
 - Transparent request forwarding to OpenAI API
 - Streamed response handling
 - Automatic `<think>` tag removal from responses
+- Runtime LLM parameter overrides (temperature, top_k, etc.)
 - Docker-ready deployment with Gunicorn
 - JSON request/response handling
 - Detailed error reporting
@@ -86,7 +87,7 @@ Error responses include:
 ### Test with Different Target
 ```bash
 # Test with custom API endpoint
-docker run -e ENV_TARGET_BASE_URL="http://your-api:8080/" -p 5000:5000 openai-proxy
+docker run -e TARGET_BASE_URL="http://your-api:8080/" -p 5000:5000 openai-proxy
 
 curl http://localhost:5000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -110,19 +111,22 @@ python cot_proxy.py
 
 ### Environment Variables
 
-- `ENV_TARGET_BASE_URL`: Target API endpoint (default: https://api.openai.com/v1/)
-- `DEBUG`: Enable debug logging (default: false)
+- `TARGET_BASE_URL`: Target API endpoint (default: https://api.openai.com/v1/)
+- `DEBUG`: Enable debug logging (default: false) 
+- `LLM_PARAMS`: Comma-separated parameter overrides in format `key=value`. Model-specific groups separated by semicolons. Example: `model=gemma,temperature=0.5,top_k=40;model=llama2,max_tokens=200`
 
 Example with all options:
 
 ```bash
-# Configure target endpoint (supports http/https)
-export ENV_TARGET_BASE_URL="http://alternate-api.example.com/"
+# Configure target endpoint and LLM parameters
+export TARGET_BASE_URL="http://alternate-api.example.com/"
+export LLM_PARAMS="model=gemma,temperature=0.5,top_k=40;model=llama2,max_tokens=200"
 export DEBUG=true
 
 # Docker usage example with debug logging:
 docker run \
-  -e ENV_TARGET_BASE_URL="http://alternate-api.example.com/" \
+  -e TARGET_BASE_URL="http://alternate-api.example.com/" \
+  -e LLM_PARAMS="model=gemma,temperature=0.5,top_k=40" \
   -e DEBUG=true \
   -p 5000:5000 openai-proxy
 ```

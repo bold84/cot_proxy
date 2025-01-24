@@ -9,6 +9,7 @@ services:
       - TARGET_BASE_URL=http://your-model-server:8080/
       - DEBUG=false
       - API_REQUEST_TIMEOUT=3000
+      - LLM_PARAMS=model=default,temperature=0.7 # Example: "model=gemma,temperature=0.5;model=llama2,max_tokens=200"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
