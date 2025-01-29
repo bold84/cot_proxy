@@ -3,7 +3,51 @@ import requests
 import re
 import os
 import logging
+from typing import Any
 from urllib.parse import urljoin
+
+# Parameter type definitions
+PARAM_TYPES = {
+    # Float parameters (0.0 to 1.0 typically)
+    'temperature': float,      # Randomness in sampling
+    'top_p': float,           # Nucleus sampling threshold
+    'presence_penalty': float, # Penalty for token presence
+    'frequency_penalty': float,# Penalty for token frequency
+    'repetition_penalty': float, # Penalty for repetition
+    
+    # Integer parameters
+    'top_k': int,             # Top-k sampling parameter
+    'max_tokens': int,        # Maximum tokens to generate
+    'n': int,                 # Number of completions
+    'seed': int,              # Random seed for reproducibility
+    'num_ctx': int,           # Context window size
+    'num_predict': int,       # Number of tokens to predict
+    'repeat_last_n': int,     # Context for repetition penalty
+    'batch_size': int,        # Batch size for generation
+    
+    # Boolean parameters
+    'echo': bool,             # Whether to echo prompt
+    'stream': bool,           # Whether to stream responses
+    'mirostat': bool,         # Use Mirostat sampling
+}
+
+def convert_param_value(key: str, value: str) -> Any:
+    """Convert parameter value to appropriate type based on parameter name."""
+    if not value or value.lower() == 'null':
+        return None
+        
+    param_type = PARAM_TYPES.get(key)
+    if not param_type:
+        return value  # Keep as string if not a known numeric param
+        
+    try:
+        if param_type == bool:
+            return value.lower() == 'true'
+        return param_type(value)
+    except (ValueError, TypeError):
+        # If conversion fails, log warning and return original string
+        logger.warning(f"Failed to convert parameter '{key}' value '{value}' to {param_type.__name__}")
+        return value
 
 app = Flask(__name__)
 
@@ -94,7 +138,9 @@ def proxy(path):
                     param = param.strip()
                     if '=' in param:
                         key, value = param.split('=', 1)
-                        model_configs[model_name][key.strip()] = value.strip()
+                        key = key.strip()
+                        value = value.strip()
+                        model_configs[model_name][key] = convert_param_value(key, value)
             
             # Get target model from request
             target_model = json_body.get('model')
