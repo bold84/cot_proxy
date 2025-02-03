@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context, g
 import requests
 import re
 import os
@@ -50,6 +50,13 @@ def convert_param_value(key: str, value: str) -> Any:
         return value
 
 app = Flask(__name__)
+
+@app.teardown_request
+def cleanup_request(exception=None):
+    """Ensure proper cleanup of resources when request ends."""
+    if hasattr(g, 'api_response'):
+        logger.debug("Cleaning up API response in teardown")
+        g.api_response.close()
 
 # Configure logging based on DEBUG environment variable
 log_level = logging.DEBUG if os.getenv('DEBUG', 'false').lower() == 'true' else logging.INFO
@@ -154,7 +161,8 @@ def proxy(path):
         
         # Try to connect with a timeout
         try:
-            api_response = requests.request(
+            # Store response in Flask's request context
+            g.api_response = requests.request(
                 method=request.method,
                 url=target_url,
                 headers=headers,
@@ -164,7 +172,7 @@ def proxy(path):
                 verify=True  # Verify SSL certificates
             )
             logger.debug(f"Connected to target URL: {target_url}")
-            logger.debug(f"Target response time: {api_response.elapsed.total_seconds()}s")
+            logger.debug(f"Target response time: {g.api_response.elapsed.total_seconds()}s")
         except requests.exceptions.Timeout:
             error_msg = f"Connection to {target_url} timed out"
             logger.error(error_msg)
@@ -191,14 +199,14 @@ def proxy(path):
             )
         
         # For error responses, return them directly without streaming
-        if api_response.status_code >= 400:
-            error_content = api_response.content.decode('utf-8')
-            logger.error(f"Target server error: {api_response.status_code}")
+        if g.api_response.status_code >= 400:
+            error_content = g.api_response.content.decode('utf-8')
+            logger.error(f"Target server error: {g.api_response.status_code}")
             logger.error(f"Error response: {error_content}")
             return Response(
                 error_content,
-                status=api_response.status_code,
-                content_type=api_response.headers.get("Content-Type", "application/json")
+                status=g.api_response.status_code,
+                content_type=g.api_response.headers.get("Content-Type", "application/json")
             )
                 
     except requests.exceptions.RequestException as e:
@@ -263,42 +271,56 @@ def proxy(path):
     
     if not is_stream:
         # For non-streaming responses, return the full content
-        content = api_response.content
+        content = g.api_response.content
         decoded = content.decode("utf-8", errors="replace")
         filtered = re.sub(r'<think>.*?</think>', '', decoded, flags=re.DOTALL)
         logger.debug(f"Non-streaming response content: {filtered}")
         return Response(
             filtered.encode("utf-8"),
-            status=api_response.status_code,
-            headers=[(name, value) for name, value in api_response.headers.items() if name.lower() != "content-length"],
-            content_type=api_response.headers.get("Content-Type", "application/json")
+            status=g.api_response.status_code,
+            headers=[(name, value) for name, value in g.api_response.headers.items() if name.lower() != "content-length"],
+            content_type=g.api_response.headers.get("Content-Type", "application/json")
         )
     else:
         # Stream the filtered response back to the client
         def generate_filtered_response():
             buffer = StreamBuffer()
-            for chunk in api_response.iter_content(chunk_size=8192):
-                # Process chunk through buffer
-                output = buffer.process_chunk(chunk)
-                if output:
-                    logger.debug(f"Streaming chunk: {output.decode('utf-8', errors='replace')}")
-                    yield output
-            
-            # Flush any remaining content
-            final_output = buffer.flush()
-            if final_output:
-                logger.debug(f"Final streaming chunk: {final_output.decode('utf-8', errors='replace')}")
-                yield final_output
+            try:
+                # Set initial connection state
+                request.is_closed = False
+                
+                while not getattr(request, 'is_closed', False):
+                    try:
+                        for chunk in g.api_response.iter_content(chunk_size=8192):
+                            if getattr(request, 'is_closed', False):
+                                logger.info("Request closed, stopping chunk generation")
+                                return
+                            
+                            output = buffer.process_chunk(chunk)
+                            if output:
+                                logger.debug(f"Streaming chunk: {output.decode('utf-8', errors='replace')}")
+                                yield output
+                    except (GeneratorExit, ConnectionError):
+                        logger.info("Client disconnected")
+                        request.is_closed = True
+                        return
+            finally:
+                # Flush any remaining content if we still have an active connection
+                if not getattr(request, 'is_closed', False):
+                    final_output = buffer.flush()
+                    if final_output:
+                        logger.debug(f"Final streaming chunk: {final_output.decode('utf-8', errors='replace')}")
+                        yield final_output
 
         # Log response details
-        logger.debug(f"Response status: {api_response.status_code}")
-        logger.debug(f"Response headers: {dict(api_response.headers)}")
+        logger.debug(f"Response status: {g.api_response.status_code}")
+        logger.debug(f"Response headers: {dict(g.api_response.headers)}")
         
         return Response(
             stream_with_context(generate_filtered_response()),
-            status=api_response.status_code,
-            headers=[(name, value) for name, value in api_response.headers.items() if name.lower() != "content-length"],
-            content_type=api_response.headers.get("Content-Type", "application/json")
+            status=g.api_response.status_code,
+            headers=[(name, value) for name, value in g.api_response.headers.items() if name.lower() != "content-length"],
+            content_type=g.api_response.headers.get("Content-Type", "application/json")
         )
 
 if __name__ == "__main__":
