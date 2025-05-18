@@ -1,36 +1,64 @@
-# Chain-of-Thought (CoT) Proxy
+# 🚀 cot_proxy: Supercharge Your LLM Workflows!
 
-A lightweight Dockerized reverse proxy for LLM API endpoints with streaming response support and advanced Chain-of-Thought filtering capabilities.
+Ever wished you had more control over how your applications interact with Large Language Models (LLMs)? **cot_proxy** is a smart, lightweight proxy that sits between your app and your LLM, giving you powerful control without changing your client code.
 
-## Features
+## 🔍 Why cot_proxy?
 
-- Transparent request forwarding to any compatible LLM API
-- Streamed response handling with efficient buffering
-- Configurable `<think>` tag filtering (can be enabled/disabled per model)
-- Model-specific parameter overrides (temperature, top_k, etc.)
-- Model name substitution (map pseudo-models to actual upstream models)
-- Message modification (append content to user messages)
-- Docker-ready deployment with Gunicorn
-- JSON request/response handling
-- Detailed error reporting and logging
-- Configurable target endpoint
+### 🧠 Master Complex Models Like Qwen3
 
-## Quick Start
+Qwen3 models have a "reasoning" mode (activated by `/think`) and a "normal" mode (activated by `/no_think`), each requiring different sampling parameters for optimal performance. This makes them difficult to use with applications like Cline or RooCode that don't allow setting these parameters.
 
-### Using Docker Compose (Recommended)
+**With cot_proxy, you can:**
+- Create simplified model names like `Qwen3-Thinking` and `Qwen3-Normal` that automatically:
+  - Apply the perfect sampling parameters for each mode
+  - Append `/think` or `/no_think` to your prompts
+  - Strip out `<think>...</think>` tags when needed
+- All without changing a single line of code in your client application!
+
+### 🛠️ Real-World Use Cases
+
+**Case 1: Standardize LLM Interactions Across Tools**
+- Problem: Your team uses multiple tools (web UIs, CLI tools, custom apps) to interact with LLMs, leading to inconsistent results.
+- Solution: Configure cot_proxy with standardized parameters and prompts for each use case, then point all tools to it.
+
+**Case 2: Clean Up Verbose Model Outputs**
+- Problem: Your model includes detailed reasoning in `<think>` tags, but your application only needs the final answer.
+- Solution: Enable think tag filtering in cot_proxy to automatically remove the reasoning, delivering clean responses.
+
+**Case 3: Simplify Complex Model Management**
+- Problem: You need to switch between different models and configurations based on the task.
+- Solution: Create intuitive "pseudo-models" like `creative-writing` or `factual-qa` that map to the right models with the right parameters.
+
+## ✨ Key Features
+
+- **Smart Request Modification**: Automatically adjust parameters and append text to prompts
+- **Response Filtering**: Remove thinking/reasoning tags from responses
+- **Model Name Mapping**: Create intuitive pseudo-models that map to actual models
+- **Streaming Support**: Works with both streaming and non-streaming responses
+- **Easy Deployment**: Dockerized for quick setup
+
+## 🚀 Quick Start (5 Minutes)
+
+### 1. Get Up and Running
+
+#### Using Docker Compose (Recommended)
 
 ```bash
-# Copy the example environment file and modify as needed
+# Clone the repository
+git clone https://github.com/bold84/cot_proxy.git
+cd cot_proxy
+
+# Copy the example environment file (includes ready-to-use Qwen3 configurations!)
 cp .env.example .env
 
-# Edit the .env file to configure your settings
+# Edit the .env file to configure your settings (optional)
 # nano .env
 
 # Start the service
 docker-compose up -d
 ```
 
-### Using Docker Directly
+#### Using Docker Directly
 
 ```bash
 # Build the Docker image
@@ -40,37 +68,56 @@ docker build -t cot-proxy .
 docker run -p 3000:5000 cot-proxy
 ```
 
-## Testing with curl
+### 2. Try It Out with Qwen3
 
-### Health Check
-```bash
-# Check proxy health and target URL connectivity
-curl http://localhost:3000/health
-```
+The `.env.example` file includes pre-configured settings for Qwen3 models with both thinking and non-thinking modes. To use them:
 
-### Chat Completion (Streaming)
+1. Make sure you've copied `.env.example` to `.env`
+2. Update the `TARGET_BASE_URL` in your `.env` file to point to your Qwen3 API
+3. Make requests to your proxy using the pre-configured model names:
+
 ```bash
-# Test streaming chat completion
+# For thinking mode with optimal parameters
 curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Authorization: Bearer $YOUR_API_KEY" \
   -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello!"}],
+    "model": "Qwen3-32B-Thinking",
+    "messages": [{"role": "user", "content": "Explain quantum computing"}],
+    "stream": true
+  }'
+
+# For non-thinking mode with optimal parameters
+curl http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $YOUR_API_KEY" \
+  -d '{
+    "model": "Qwen3-32B-Non-Thinking",
+    "messages": [{"role": "user", "content": "Explain quantum computing"}],
     "stream": true
   }'
 ```
 
-### Chat Completion (Non-streaming)
+## 🧪 Additional Testing Options
+
+### Health Check
 ```bash
-# Test regular chat completion
-curl http://localhost:3000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
+# Verify your proxy is running and can connect to your target API
+curl http://localhost:3000/health
+```
+
+### Testing Different Configurations
+
+#### Test with a Custom Target API
+```bash
+# Run with a different target API endpoint
+docker run -e TARGET_BASE_URL="http://your-api:8080/" -p 3000:5000 cot-proxy
+```
+
+#### Test with Debug Logging
+```bash
+# Enable debug logging to see detailed request/response information
+docker run -e DEBUG=true -p 3000:5000 cot-proxy
 ```
 
 ### Error Handling
@@ -78,20 +125,14 @@ curl http://localhost:3000/v1/chat/completions \
 The proxy provides detailed error responses for various scenarios:
 
 ```bash
-# Test with invalid API key
+# Test with invalid API key to see authentication error handling
 curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer invalid_key" \
   -d '{
-    "model": "gpt-4",
+    "model": "your-model",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
-
-# Test with invalid JSON
-curl http://localhost:3000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -d '{invalid json}'
 ```
 
 Error responses include:
@@ -101,28 +142,47 @@ Error responses include:
 - 504: Connection timeouts
 - Original error codes from target API (401, 403, etc.)
 
-### Test with Different Target
-```bash
-# Test with custom API endpoint
-docker run -e TARGET_BASE_URL="http://your-api:8080/" -p 3000:5000 cot-proxy
+## 👨‍💻 Development Setup
 
-curl http://localhost:3000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
-```
-
-## Development Setup
+Want to contribute or customize `cot_proxy` for your specific needs? Here's how to set up a development environment:
 
 ```bash
+# Clone the repository
+git clone https://github.com/bold84/cot_proxy.git
+cd cot_proxy
+
+# Create and activate a virtual environment
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Run the development server
 python cot_proxy.py
 ```
+
+### Running Tests
+
+`cot_proxy` includes a comprehensive test suite to ensure everything works as expected:
+
+```bash
+# Install test dependencies
+pip install pytest pytest-flask pytest-mock responses
+
+# Run all tests
+pytest
+
+# Run specific test files
+pytest tests/test_stream_buffer.py
+pytest tests/test_llm_params.py
+```
+
+The test suite covers:
+- Stream buffer functionality for think tag filtering
+- LLM parameter handling and overrides
+- Request/response proxying (both streaming and non-streaming)
+- Error handling scenarios
 
 ## Configuration
 
@@ -228,7 +288,7 @@ The proxy uses an efficient streaming buffer to handle think tags that span mult
 You can create "pseudo-models" that map to actual upstream models using the `upstream_model_name` parameter:
 
 ```
-model=my-custom-gpt4,upstream_model_name=gpt-4-turbo
+model=my-custom-model,upstream_model_name=actual-model-name
 ```
 
 This allows you to:
@@ -255,14 +315,14 @@ append_to_last_user_message=\n\nAlways respond in JSON format.
 
 ```bash
 # In your .env file:
-LLM_PARAMS=model=GPT4-Thinking,upstream_model_name=gpt-4,temperature=0.7,enable_think_tag_filtering=false,append_to_last_user_message=\n\nPlease show your reasoning using <think></think> tags;model=GPT4-Clean,upstream_model_name=gpt-4,temperature=0.7,enable_think_tag_filtering=true,append_to_last_user_message=\n\nRespond directly and concisely
+LLM_PARAMS=model=Qwen3-Thinking,upstream_model_name=Qwen3-32B,temperature=0.7,enable_think_tag_filtering=false,append_to_last_user_message=\n\n/think;model=Qwen3-Clean,upstream_model_name=Qwen3-32B,temperature=0.7,enable_think_tag_filtering=true,append_to_last_user_message=\n\n/no_think
 
 # Client can then request either model:
 curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Authorization: Bearer $YOUR_API_KEY" \
   -d '{
-    "model": "GPT4-Thinking",
+    "model": "Qwen3-Thinking",
     "messages": [{"role": "user", "content": "Solve: 25 × 13"}],
     "stream": true
   }'
@@ -270,8 +330,29 @@ curl http://localhost:3000/v1/chat/completions \
 
 ## Dependencies
 
-- Python 3.12+
-- Flask
-- Requests
-- Gunicorn (production)
-- pytest (development)
+- **Python 3.9+**: The core runtime environment
+- **Flask 3.0.2**: Lightweight web framework for handling HTTP requests
+- **Requests 2.31.0**: HTTP library for forwarding requests to the target API
+- **Gunicorn 21.2.0**: Production-grade WSGI server (used in Docker deployment)
+- **Testing tools**:
+  - pytest: Python testing framework
+  - pytest-flask: Flask integration for pytest
+  - pytest-mock: Mocking support for pytest
+  - responses: Mock HTTP responses
+
+## 🤝 Community & Contributions
+
+We welcome contributions to make `cot_proxy` even better! Here's how you can help:
+
+- **Star the repository**: Show your support and help others discover the project
+- **Report issues**: Found a bug or have a feature request? Open an issue on GitHub
+- **Submit pull requests**: Code improvements and bug fixes are always welcome
+- **Share your use cases**: Let us know how you're using `cot_proxy` in your projects
+
+### License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Contact
+
+For questions or feedback, please open an issue on the GitHub repository: [https://github.com/bold84/cot_proxy](https://github.com/bold84/cot_proxy)
