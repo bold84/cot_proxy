@@ -21,7 +21,9 @@ def test_proxy_streaming_basic_think_tag_removal(client, mocker, caplog, enable_
     caplog.set_level(logging.DEBUG)
     mocked_target_base = "http://fake-target-stream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
-    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=test-model,enable_think_tag_filtering=true"
+    }, clear=True)
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
     mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
 
@@ -64,7 +66,7 @@ def test_proxy_streaming_llm_params_custom_tags(client, mocker, caplog):
     mocked_target_base = "http://fake-target-stream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
     mocker.patch.dict(os.environ, {
-        "LLM_PARAMS": f"model=my-streaming-model,think_tag_start={custom_start},think_tag_end={custom_end}",
+        "LLM_PARAMS": f"model=my-streaming-model,think_tag_start={custom_start},think_tag_end={custom_end},enable_think_tag_filtering=true",
     }, clear=True)
     # No need to patch cot_proxy.DEFAULT_THINK_START/END_TAG as LLM_PARAMS model-specific should override
 
@@ -102,6 +104,7 @@ def test_proxy_streaming_global_env_tags(client, mocker, caplog):
     mocker.patch.dict(os.environ, {
         "THINK_TAG": env_start_tag,
         "THINK_END_TAG": env_end_tag,
+        "LLM_PARAMS": "model=another-model,enable_think_tag_filtering=true"
     }, clear=True)
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', env_start_tag)
     mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', env_end_tag)
@@ -135,7 +138,9 @@ def test_proxy_streaming_tag_split_across_chunks(client, mocker, caplog):
     """Test streaming where a think tag is split across multiple chunks."""
     mocked_target_base = "http://fake-target-stream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
-    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=split-model,enable_think_tag_filtering=true"
+    }, clear=True)
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
     mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
 

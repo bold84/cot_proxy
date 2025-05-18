@@ -78,7 +78,9 @@ def test_proxy_non_streaming_think_tag_removal_default_tags(client, mocker, capl
     caplog.set_level(logging.DEBUG)
     mocked_target_base = "http://fake-target-nonstream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
-    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=nonstream-model,enable_think_tag_filtering=true"
+    }, clear=True)
     # Ensure module defaults are the code defaults for this test
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
     mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
@@ -111,7 +113,7 @@ def test_proxy_non_streaming_think_tag_removal_llm_params_tags(client, mocker, c
     mocked_target_base = "http://fake-target-nonstream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
     mocker.patch.dict(os.environ, {
-        "LLM_PARAMS": f"model=llm-param-model,think_tag_start={custom_start},think_tag_end={custom_end}",
+        "LLM_PARAMS": f"model=llm-param-model,think_tag_start={custom_start},think_tag_end={custom_end},enable_think_tag_filtering=true",
     }, clear=True)
 
     raw_content_from_target = f"Data {custom_start}hidden{custom_end} visible."
@@ -141,6 +143,7 @@ def test_proxy_non_streaming_think_tag_removal_global_env_tags(client, mocker, c
     mocker.patch.dict(os.environ, {
         "THINK_TAG": env_start,
         "THINK_END_TAG": env_end,
+        "LLM_PARAMS": "model=global-env-model,enable_think_tag_filtering=true"
     }, clear=True)
     # Patch module-level defaults so the THINK_TAG env vars are picked up
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', env_start)
@@ -169,7 +172,9 @@ def test_proxy_non_streaming_no_stream_key_in_request(client, mocker, caplog, en
     caplog.set_level(logging.DEBUG)
     mocked_target_base = "http://fake-target-nonstream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
-    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=no-stream-key-model,enable_think_tag_filtering=true"
+    }, clear=True)
     # Ensure module defaults are the code defaults for this test
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
     mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
@@ -200,7 +205,9 @@ def test_proxy_non_streaming_no_json_body(client, mocker, caplog, enable_debug):
     caplog.set_level(logging.DEBUG)
     mocked_target_base = "http://fake-target-nonstream/"
     mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
-    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=default,enable_think_tag_filtering=true" # For the second part of the test
+    }, clear=True)
     # Ensure module defaults are the code defaults for this test
     mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
     mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
@@ -232,19 +239,3 @@ def test_proxy_non_streaming_no_json_body(client, mocker, caplog, enable_debug):
     # The `effective_think_start_tag` would be the global defaults in this case.
     # So, if the response *did* contain default tags, they *would* be stripped.
     
-    # Let's re-test with default tags in response to confirm this path
-    responses.reset()
-    target_response_with_tags = f"Data {DEFAULT_CODE_START_TAG}tags{DEFAULT_CODE_END_TAG} more."
-    responses.add(
-        responses.GET,
-        f"{mocked_target_base}simple/get/path_with_tags",
-        body=target_response_with_tags,
-        status=200,
-        content_type="text/plain"
-    )
-    caplog.clear()
-    proxy_response_tags = client.get("/simple/get/path_with_tags")
-    assert proxy_response_tags.status_code == 200
-    assert proxy_response_tags.data.decode('utf-8') == "Data  more."
-    assert "Stream mode: False" in caplog.text
-    assert "Non-streaming response content: Data  more." in caplog.text

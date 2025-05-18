@@ -187,6 +187,8 @@ def proxy(path):
     effective_think_start_tag = DEFAULT_THINK_START_TAG
     effective_think_end_tag = DEFAULT_THINK_END_TAG
     target_model_for_log = 'default' # For logging if no model in request
+    model_specific_config = {}  # Initialize to ensure it's always a dict
+    enable_think_tag_filtering = False  # Default to filtering disabled
 
     try:
         # Get JSON body if present
@@ -230,7 +232,7 @@ def proxy(path):
                     model_specific_config = model_configs[current_target_model]
                     effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
                     effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
-                    enable_think_tag_filtering = model_specific_config.get('enable_think_tag_filtering', False)
+                    enable_think_tag_filtering = model_specific_config.get('enable_think_tag_filtering', False) # Default to False if key missing
                     original_model = current_target_model
                     logger.debug(f"Applying LLM parameters for model: {original_model}")
 
@@ -244,7 +246,7 @@ def proxy(path):
                     # Apply other parameters (excluding think tags and upstream_model_name)
                     logger.debug(f"Applying LLM parameters for model: {current_target_model}")
                     for key, value in model_specific_config.items():
-                        if key not in ['enable_think_tag_filtering', 'think_tag_start', 'think_tag_end', 'upstream_model_name']:
+                        if key not in ['enable_think_tag_filtering', 'think_tag_start', 'think_tag_end', 'upstream_model_name', 'append_to_last_user_message']:
                             json_body[key] = value
                             logger.debug(f"Overriding LLM parameter: {key} = {value}")
 
@@ -261,7 +263,7 @@ def proxy(path):
                     model_specific_config = model_configs["default"]
                     effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
                     effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
-                    enable_think_tag_filtering = model_specific_config.get('enable_think_tag_filtering', False)
+                    enable_think_tag_filtering = model_specific_config.get('enable_think_tag_filtering', False) # Default to False if key missing
                     original_model = 'default (no model in request)'
                     logger.debug(f"Applying LLM parameters for 'default' model configuration (no model in request).")
 
@@ -272,12 +274,13 @@ def proxy(path):
                         logger.info(f"Using upstream model '{upstream_model}' for default configuration")
 
                     for key, value in model_specific_config.items():
-                        if key not in ['think_tag_start', 'think_tag_end', 'upstream_model_name']:
+                        if key not in ['enable_think_tag_filtering', 'think_tag_start', 'think_tag_end', 'upstream_model_name', 'append_to_last_user_message']:
                             json_body[key] = value
                             logger.debug(f"Overriding LLM parameter for 'default': {key} = {value}")
 
 
         logger.info(f"Using think tags for model '{target_model_for_log}': START='{effective_think_start_tag}', END='{effective_think_end_tag}'")
+        logger.info(f"Think tag filtering enabled: {enable_think_tag_filtering} for model '{target_model_for_log}'")
         
         append_string = model_specific_config.get('append_to_last_user_message')
         if append_string:

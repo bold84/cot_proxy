@@ -1,26 +1,43 @@
-# OpenAI API Reverse Proxy
+# Chain-of-Thought (CoT) Proxy
 
-A lightweight Dockerized reverse proxy for OpenAI's API endpoints with streaming response support.
+A lightweight Dockerized reverse proxy for LLM API endpoints with streaming response support and advanced Chain-of-Thought filtering capabilities.
 
 ## Features
 
-- Transparent request forwarding to OpenAI API
-- Streamed response handling
-- Automatic `<think>` tag removal from responses
-- Runtime LLM parameter overrides (temperature, top_k, etc.)
+- Transparent request forwarding to any compatible LLM API
+- Streamed response handling with efficient buffering
+- Configurable `<think>` tag filtering (can be enabled/disabled per model)
+- Model-specific parameter overrides (temperature, top_k, etc.)
+- Model name substitution (map pseudo-models to actual upstream models)
+- Message modification (append content to user messages)
 - Docker-ready deployment with Gunicorn
 - JSON request/response handling
-- Detailed error reporting
+- Detailed error reporting and logging
 - Configurable target endpoint
 
 ## Quick Start
 
+### Using Docker Compose (Recommended)
+
+```bash
+# Copy the example environment file and modify as needed
+cp .env.example .env
+
+# Edit the .env file to configure your settings
+# nano .env
+
+# Start the service
+docker-compose up -d
+```
+
+### Using Docker Directly
+
 ```bash
 # Build the Docker image
-docker build -t openai-proxy .
+docker build -t cot-proxy .
 
 # Run the container
-docker run -p 5000:5000 openai-proxy
+docker run -p 3000:5000 cot-proxy
 ```
 
 ## Testing with curl
@@ -28,13 +45,13 @@ docker run -p 5000:5000 openai-proxy
 ### Health Check
 ```bash
 # Check proxy health and target URL connectivity
-curl http://localhost:5000/health
+curl http://localhost:3000/health
 ```
 
 ### Chat Completion (Streaming)
 ```bash
 # Test streaming chat completion
-curl http://localhost:5000/v1/chat/completions \
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{
@@ -47,7 +64,7 @@ curl http://localhost:5000/v1/chat/completions \
 ### Chat Completion (Non-streaming)
 ```bash
 # Test regular chat completion
-curl http://localhost:5000/v1/chat/completions \
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{
@@ -62,7 +79,7 @@ The proxy provides detailed error responses for various scenarios:
 
 ```bash
 # Test with invalid API key
-curl http://localhost:5000/v1/chat/completions \
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer invalid_key" \
   -d '{
@@ -71,7 +88,7 @@ curl http://localhost:5000/v1/chat/completions \
   }'
 
 # Test with invalid JSON
-curl http://localhost:5000/v1/chat/completions \
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{invalid json}'
@@ -87,9 +104,9 @@ Error responses include:
 ### Test with Different Target
 ```bash
 # Test with custom API endpoint
-docker run -e TARGET_BASE_URL="http://your-api:8080/" -p 5000:5000 openai-proxy
+docker run -e TARGET_BASE_URL="http://your-api:8080/" -p 3000:5000 cot-proxy
 
-curl http://localhost:5000/v1/chat/completions \
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -d '{
@@ -119,15 +136,19 @@ The `docker-compose.yml` file defines default values for these environment varia
 
 The following variables can be set (values in [`.env.example`](.env.example:0) are illustrative, and defaults are shown from `docker-compose.yml`):
 
-- `HOST_PORT`: The port on the host machine to expose the proxy service (default: `5000`). The container internal port is fixed at `5000`.
+- `HOST_PORT`: The port on the host machine to expose the proxy service (default: `3000`). The container internal port is fixed at `5000`.
 - `TARGET_BASE_URL`: Target API endpoint (default in example: `http://your-model-server:8080/`)
 - `DEBUG`: Enable debug logging (`true` or `false`, default in example: `false`)
 - `API_REQUEST_TIMEOUT`: Timeout for API requests in seconds (default in example: `3000`)
 - `LLM_PARAMS`: Comma-separated parameter overrides in format `key=value`. Model-specific groups separated by semicolons.
   - Standard LLM parameters like `temperature`, `top_k`, etc., can be overridden per model.
-  - Additionally, `think_tag_start` and `think_tag_end` can be specified per model to customize the tags used for stripping thought processes from responses.
-  - Example in `.env.example`: `LLM_PARAMS=model=default,temperature=0.7,think_tag_start=<default_think>,think_tag_end=</default_think>`
-  - Example for Qwen3 (commented out in `.env.example`): `LLM_PARAMS=model=hf.co/unsloth/Qwen3-14B-GGUF:Q6_K_XL,think_tag_start=\u003cthink\u003e,think_tag_end=\u003c/think\u003e\n\n`
+  - Special parameters:
+    - `think_tag_start` and `think_tag_end`: Customize the tags used for stripping thought processes
+    - `enable_think_tag_filtering`: Set to `true` to enable filtering of think tags (default: `false`)
+    - `upstream_model_name`: Replace the requested model with a different model name when forwarding to the API
+    - `append_to_last_user_message`: Add text to the last user message or create a new one if needed
+  - Example in `.env.example`: `LLM_PARAMS=model=default,temperature=0.7,enable_think_tag_filtering=true,think_tag_start=<think>,think_tag_end=</think>`
+  - Example for Qwen3 (commented out in `.env.example`): `LLM_PARAMS=model=Qwen3-32B-Non-Thinking,upstream_model_name=Qwen3-32B,temperature=0.7,top_k=20,top_p=0.8,enable_think_tag_filtering=true,think_tag_start=<think>,think_tag_end=</think>,append_to_last_user_message=\n\n/no_think`
 - `THINK_TAG`: Global default start tag for stripping thought processes (e.g., `<think>`). Overridden by model-specific `think_tag_start` in `LLM_PARAMS`. Defaults to `<think>` if not set via this variable or `LLM_PARAMS`. (Example in `.env.example`: `<think>`)
 - `THINK_END_TAG`: Global default end tag for stripping thought processes (e.g., `</think>`). Overridden by model-specific `think_tag_end` in `LLM_PARAMS`. Defaults to `</think>` if not set via this variable or `LLM_PARAMS`. (Example in `.env.example`: `</think>`)
 
@@ -154,7 +175,7 @@ docker-compose up -d
 If you need to override a variable from the `.env` file for a specific `docker run` command (less common when using Docker Compose), you can still use the `-e` flag:
 ```bash
 # Example: Overriding DEBUG for a single run, assuming you're not using docker-compose here
-docker run -e DEBUG=true -p 5000:5000 openai-proxy
+docker run -e DEBUG=true -p 3000:5000 cot-proxy
 ```
 However, with the current `docker-compose.yml` setup, managing variables through the `.env` file (to override defaults) is the recommended method.
 
@@ -167,9 +188,90 @@ The service uses Gunicorn with the following settings:
 - Automatic error recovery
 - Health check endpoint for monitoring
 
+## Advanced Features
+
+### Model-Specific Configuration
+
+The proxy allows you to define different configurations for different models using the `LLM_PARAMS` environment variable. This enables you to:
+
+1. Create "pseudo-models" that map to real upstream models with specific parameters
+2. Apply different parameter sets to different models
+3. Configure think tag filtering differently per model
+
+Example configuration for multiple models:
+
+```
+LLM_PARAMS=model=Qwen3-32B-Non-Thinking,upstream_model_name=Qwen3-32B,temperature=0.7,top_k=20,top_p=0.8,enable_think_tag_filtering=true,think_tag_start=<think>,think_tag_end=</think>,append_to_last_user_message=\n\n/no_think;model=Qwen3-32B-Thinking,upstream_model_name=Qwen3-32B,temperature=0.6,top_k=20,top_p=0.95,append_to_last_user_message=\n\n/think,enable_think_tag_filtering=true,think_tag_start=<think>,think_tag_end=</think>
+```
+
+This creates two pseudo-models:
+- `Qwen3-32B-Non-Thinking`: Maps to `Qwen3-32B` with parameters optimized for non-thinking mode
+- `Qwen3-32B-Thinking`: Maps to `Qwen3-32B` with parameters optimized for thinking mode
+
+### Think Tag Filtering
+
+The proxy can filter out content enclosed in think tags from model responses. This is useful for:
+
+1. Removing internal reasoning/thinking from final outputs
+2. Cleaning up responses for end users
+3. Maintaining a clean conversation history
+
+Think tag filtering can be:
+- Enabled globally via environment variables
+- Configured per model via `LLM_PARAMS`
+- Enabled/disabled per model using `enable_think_tag_filtering`
+
+The proxy uses an efficient streaming buffer to handle think tags that span multiple chunks in streaming responses.
+
+### Model Name Substitution
+
+You can create "pseudo-models" that map to actual upstream models using the `upstream_model_name` parameter:
+
+```
+model=my-custom-gpt4,upstream_model_name=gpt-4-turbo
+```
+
+This allows you to:
+1. Create simplified model names for end users
+2. Hide implementation details of which models you're actually using
+3. Easily switch underlying models without changing client code
+
+### Message Modification
+
+The proxy can automatically append content to the last user message or create a new user message if needed. This is useful for:
+
+1. Adding system instructions without changing client code
+2. Injecting special commands or flags (like `/think` or `/no_think`)
+3. Standardizing prompts across different clients
+
+Example:
+```
+append_to_last_user_message=\n\nAlways respond in JSON format.
+```
+
+### Usage Examples
+
+#### Creating a "Thinking" and "Non-Thinking" Version of the Same Model
+
+```bash
+# In your .env file:
+LLM_PARAMS=model=GPT4-Thinking,upstream_model_name=gpt-4,temperature=0.7,enable_think_tag_filtering=false,append_to_last_user_message=\n\nPlease show your reasoning using <think></think> tags;model=GPT4-Clean,upstream_model_name=gpt-4,temperature=0.7,enable_think_tag_filtering=true,append_to_last_user_message=\n\nRespond directly and concisely
+
+# Client can then request either model:
+curl http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "GPT4-Thinking",
+    "messages": [{"role": "user", "content": "Solve: 25 × 13"}],
+    "stream": true
+  }'
+```
+
 ## Dependencies
 
 - Python 3.9+
 - Flask
 - Requests
 - Gunicorn (production)
+- pytest (development)
