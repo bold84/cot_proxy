@@ -270,7 +270,7 @@ curl http://localhost:3000/v1/chat/completions \
 
 ## Dependencies
 
-- Python 3.9+
+- Python 3.12+
 - Flask
 - Requests
 - Gunicorn (production)
