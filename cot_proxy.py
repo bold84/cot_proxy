@@ -218,6 +218,8 @@ def proxy(path):
                             value = value.strip()
                             if key in ['think_tag_start', 'think_tag_end', 'upstream_model_name', 'append_to_last_user_message']:
                                 model_configs[model_name][key] = value  # Store as raw string
+                            elif key == 'enable_think_tag_filtering':
+                                model_configs[model_name][key] = value.lower() == 'true'
                             else:
                                 model_configs[model_name][key] = convert_param_value(key, value)
                 
@@ -228,6 +230,7 @@ def proxy(path):
                     model_specific_config = model_configs[current_target_model]
                     effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
                     effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
+                    enable_think_tag_filtering = model_specific_config.get('enable_think_tag_filtering', False)
                     original_model = current_target_model
                     logger.debug(f"Applying LLM parameters for model: {original_model}")
 
@@ -241,7 +244,7 @@ def proxy(path):
                     # Apply other parameters (excluding think tags and upstream_model_name)
                     logger.debug(f"Applying LLM parameters for model: {current_target_model}")
                     for key, value in model_specific_config.items():
-                        if key not in ['think_tag_start', 'think_tag_end', 'upstream_model_name']:
+                        if key not in ['enable_think_tag_filtering', 'think_tag_start', 'think_tag_end', 'upstream_model_name']:
                             json_body[key] = value
                             logger.debug(f"Overriding LLM parameter: {key} = {value}")
 
@@ -258,6 +261,7 @@ def proxy(path):
                     model_specific_config = model_configs["default"]
                     effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
                     effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
+                    enable_think_tag_filtering = model_specific_config.get('enable_think_tag_filtering', False)
                     original_model = 'default (no model in request)'
                     logger.debug(f"Applying LLM parameters for 'default' model configuration (no model in request).")
 
@@ -361,9 +365,15 @@ def proxy(path):
         # For non-streaming responses, return the full content
         content = g.api_response.content
         decoded = content.decode("utf-8", errors="replace")
-        # Use effective_think_start_tag and effective_think_end_tag defined earlier in the proxy function
-        think_pattern = f"{re.escape(effective_think_start_tag)}.*?{re.escape(effective_think_end_tag)}"
-        filtered = re.sub(think_pattern, '', decoded, flags=re.DOTALL)
+        
+        # Conditional filtering based on enable_think_tag_filtering
+        if enable_think_tag_filtering:
+            # Use effective_think_start_tag and effective_think_end_tag defined earlier in the proxy function
+            think_pattern = f"{re.escape(effective_think_start_tag)}.*?{re.escape(effective_think_end_tag)}"
+            filtered = re.sub(think_pattern, '', decoded, flags=re.DOTALL)
+        else:
+            filtered = decoded  # Skip filtering
+        
         logger.debug(f"Non-streaming response content: {filtered}")
         return Response(
             filtered.encode("utf-8"),
@@ -377,22 +387,29 @@ def proxy(path):
             buffer = StreamBuffer(effective_think_start_tag, effective_think_end_tag)
             client_disconnected = False
             try:
-                for chunk in g.api_response.iter_content(chunk_size=8192):
-                    # The act of trying to yield to a disconnected client will typically
-                    # raise GeneratorExit or a socket error, caught below.
+                # Conditional filtering based on enable_think_tag_filtering
+                if enable_think_tag_filtering:
+                    for chunk in g.api_response.iter_content(chunk_size=8192):
+                        # The act of trying to yield to a disconnected client will typically
+                        # raise GeneratorExit or a socket error, caught below.
+                        
+                        output = buffer.process_chunk(chunk)
+                        if output:
+                            logger.debug(f"Streaming chunk: {output.decode('utf-8', errors='replace')}")
+                            yield output
                     
-                    output = buffer.process_chunk(chunk)
-                    if output:
-                        logger.debug(f"Streaming chunk: {output.decode('utf-8', errors='replace')}")
-                        yield output
-                
-                # After the loop, if the client is still considered connected, flush the buffer
-                # (client_disconnected flag will be true if the except block was hit)
-                if not client_disconnected:
-                    final_output = buffer.flush()
-                    if final_output:
-                        logger.debug(f"Final streaming chunk after loop: {final_output.decode('utf-8', errors='replace')}")
-                        yield final_output
+                    # After the loop, if the client is still considered connected, flush the buffer
+                    # (client_disconnected flag will be true if the except block was hit)
+                    if not client_disconnected:
+                        final_output = buffer.flush()
+                        if final_output:
+                            logger.debug(f"Final streaming chunk after loop: {final_output.decode('utf-8', errors='replace')}")
+                            yield final_output
+                else:
+                    # No filtering: stream chunks directly
+                    for chunk in g.api_response.iter_content(chunk_size=8192):
+                        yield chunk
+                        
                         
             except (GeneratorExit, ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
                 # Only log if it's not a GeneratorExit (which is a normal stream closure)
