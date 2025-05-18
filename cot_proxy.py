@@ -216,9 +216,7 @@ def proxy(path):
                             key, value = param.split('=', 1)
                             key = key.strip()
                             value = value.strip()
-                            if key in ['think_tag_start', 'think_tag_end']:
-                                model_configs[model_name][key] = value # Store as raw string
-                            elif key == 'upstream_model_name':
+                            if key in ['think_tag_start', 'think_tag_end', 'upstream_model_name', 'append_to_last_user_message']:
                                 model_configs[model_name][key] = value  # Store as raw string
                             else:
                                 model_configs[model_name][key] = convert_param_value(key, value)
@@ -276,6 +274,25 @@ def proxy(path):
 
 
         logger.info(f"Using think tags for model '{target_model_for_log}': START='{effective_think_start_tag}', END='{effective_think_end_tag}'")
+        
+        append_string = model_specific_config.get('append_to_last_user_message')
+        if append_string:
+            if 'messages' not in json_body or not json_body['messages']:
+                # No messages: create a new user message with the string
+                json_body.setdefault('messages', [])
+                json_body['messages'].append({"role": "user", "content": append_string})
+                logger.debug(f"Created new user message with content: {append_string}")
+            else:
+                # Find the last message to append to
+                last_message = json_body['messages'][-1]
+                if last_message.get('role') == 'user':
+                    last_message['content'] += append_string
+                    logger.debug(f"Appended to existing user message: {append_string}")
+                else:
+                    # Last message is not user: insert a new user message
+                    json_body['messages'].append({"role": "user", "content": append_string})
+                    logger.debug(f"Inserted new user message with content: {append_string}")
+        
         
         # Try to connect with a timeout
         try:
