@@ -218,6 +218,8 @@ def proxy(path):
                             value = value.strip()
                             if key in ['think_tag_start', 'think_tag_end']:
                                 model_configs[model_name][key] = value # Store as raw string
+                            elif key == 'upstream_model_name':
+                                model_configs[model_name][key] = value  # Store as raw string
                             else:
                                 model_configs[model_name][key] = convert_param_value(key, value)
                 
@@ -228,12 +230,23 @@ def proxy(path):
                     model_specific_config = model_configs[current_target_model]
                     effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
                     effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
-                    
+                    original_model = current_target_model
+                    logger.debug(f"Applying LLM parameters for model: {original_model}")
+
+                    # Replace the model in the request body if upstream_model_name is specified
+                    if 'upstream_model_name' in model_specific_config:
+                        upstream_model = model_specific_config['upstream_model_name']
+                        json_body['model'] = upstream_model
+                        target_model_for_log = upstream_model
+                        logger.info(f"Replacing pseudo model '{original_model}' with upstream model '{upstream_model}'")
+
+                    # Apply other parameters (excluding think tags and upstream_model_name)
                     logger.debug(f"Applying LLM parameters for model: {current_target_model}")
                     for key, value in model_specific_config.items():
-                        if key not in ['think_tag_start', 'think_tag_end']: # Exclude think tags from being sent to LLM
+                        if key not in ['think_tag_start', 'think_tag_end', 'upstream_model_name']:
                             json_body[key] = value
                             logger.debug(f"Overriding LLM parameter: {key} = {value}")
+
                 elif current_target_model: # Model in request, but no specific config in LLM_PARAMS
                     logger.debug(f"No specific LLM_PARAMS configuration found for model: {current_target_model}. Using default think tags.")
                 # If no current_target_model in json_body, effective tags remain global defaults.
@@ -243,15 +256,22 @@ def proxy(path):
                 # If a "default" model config exists in LLM_PARAMS and no model is in request,
                 # it should ideally pick up "default" config for overrides too.
                 # Let's adjust to check for "default" config if no model in request.
-                elif "default" in model_configs and not current_target_model : # No model in request, but "default" config exists
+                elif "default" in model_configs and not current_target_model:
                     model_specific_config = model_configs["default"]
                     effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
                     effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
-                    target_model_for_log = 'default' # Explicitly for log
+                    original_model = 'default (no model in request)'
                     logger.debug(f"Applying LLM parameters for 'default' model configuration (no model in request).")
+
+                    if 'upstream_model_name' in model_specific_config:
+                        upstream_model = model_specific_config['upstream_model_name']
+                        json_body['model'] = upstream_model
+                        target_model_for_log = upstream_model
+                        logger.info(f"Using upstream model '{upstream_model}' for default configuration")
+
                     for key, value in model_specific_config.items():
-                        if key not in ['think_tag_start', 'think_tag_end']:
-                            json_body[key] = value # Apply to the original json_body
+                        if key not in ['think_tag_start', 'think_tag_end', 'upstream_model_name']:
+                            json_body[key] = value
                             logger.debug(f"Overriding LLM parameter for 'default': {key} = {value}")
 
 
