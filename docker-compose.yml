@@ -4,14 +4,21 @@ services:
   cot-proxy:
     build: .
     ports:
-      - "5000:5000"
+      - "${HOST_PORT:-3000}:5000" # Exposes the service on HOST_PORT (default 5000) on the host, mapping to container port 5000
+    env_file:
+      - .env # Docker Compose will look for a .env file in the same directory
+    # Environment variables defined below use the `${VARIABLE:-default_value}` syntax.
+    # This means if VARIABLE is set (e.g., from the .env file or shell), its value is used.
+    # If VARIABLE is not set or is empty, default_value is used.
     environment:
-      - TARGET_BASE_URL=http://your-model-server:8080/
-      - DEBUG=false
-      - API_REQUEST_TIMEOUT=3000
-      - LLM_PARAMS=model=default,temperature=0.7 # Example: "model=gemma,temperature=0.5;model=llama2,max_tokens=200"
+      - TARGET_BASE_URL=${TARGET_BASE_URL:-http://your-model-server:8080/}
+      - DEBUG=${DEBUG:-false}
+      - API_REQUEST_TIMEOUT=${API_REQUEST_TIMEOUT:-3000}
+      - LLM_PARAMS=${LLM_PARAMS:-model=default,temperature=0.7,think_tag_start=<default_think>,think_tag_end=</default_think>}
+      - THINK_TAG=${THINK_TAG:-<think>}
+      - THINK_END_TAG=${THINK_END_TAG:-</think>}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

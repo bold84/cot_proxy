@@ -5,6 +5,12 @@ import os
 import logging
 from typing import Any
 from urllib.parse import urljoin
+import re # Ensure re is available for escaping
+
+# Global default think tags
+# Prioritize environment variables, then hardcoded defaults
+DEFAULT_THINK_START_TAG = os.getenv('THINK_TAG', '<think>')
+DEFAULT_THINK_END_TAG = os.getenv('THINK_END_TAG', '</think>')
 
 # Parameter type definitions
 PARAM_TYPES = {
@@ -147,17 +153,33 @@ def proxy(path):
                         key, value = param.split('=', 1)
                         key = key.strip()
                         value = value.strip()
-                        model_configs[model_name][key] = convert_param_value(key, value)
+                        if key in ['think_tag_start', 'think_tag_end']:
+                            model_configs[model_name][key] = value # Store as raw string
+                        else:
+                            model_configs[model_name][key] = convert_param_value(key, value)
             
             # Get target model from request
             target_model = json_body.get('model')
+
+            # Determine effective think tags
+            effective_think_start_tag = DEFAULT_THINK_START_TAG
+            effective_think_end_tag = DEFAULT_THINK_END_TAG
+
             if target_model and target_model in model_configs:
-                logger.debug(f"Applying parameters for model: {target_model}")
-                for key, value in model_configs[target_model].items():
-                    json_body[key] = value
-                    logger.debug(f"Overriding parameter: {key} = {value}")
+                model_specific_config = model_configs[target_model]
+                effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
+                effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
+                
+                logger.debug(f"Applying LLM parameters for model: {target_model}")
+                for key, value in model_specific_config.items():
+                    if key not in ['think_tag_start', 'think_tag_end']: # Exclude think tags from being sent to LLM
+                        json_body[key] = value
+                        logger.debug(f"Overriding LLM parameter: {key} = {value}")
             elif target_model:
-                logger.debug(f"No configuration found for model: {target_model}")
+                logger.debug(f"No specific LLM_PARAMS configuration found for model: {target_model}. Using default think tags.")
+            # If no target_model, default think tags are already set
+
+            logger.info(f"Using think tags for model '{target_model or 'default'}': START='{effective_think_start_tag}', END='{effective_think_end_tag}'")
         
         # Try to connect with a timeout
         try:
@@ -220,8 +242,10 @@ def proxy(path):
 
     # Buffer for handling think tags across chunks
     class StreamBuffer:
-        def __init__(self):
+        def __init__(self, start_tag, end_tag):
             self.buffer = ""
+            self.start_tag = start_tag
+            self.end_tag = end_tag
             
         def process_chunk(self, chunk):
             # Decode and add to buffer
@@ -232,11 +256,11 @@ def proxy(path):
             
             while True:
                 # Find the next potential tag start
-                start = self.buffer.find("<think>")
+                start = self.buffer.find(self.start_tag)
                 
                 if start == -1:
                     # No more think tags, output all except last few chars
-                    if len(self.buffer) > 1024:
+                    if len(self.buffer) > 1024: # Keep some buffer for potential partial tags at the very end
                         output += self.buffer[:-1024]
                         self.buffer = self.buffer[-1024:]
                     break
@@ -248,13 +272,18 @@ def proxy(path):
                     start = 0  # Tag is now at start of buffer
                 
                 # Look for end tag
-                end = self.buffer.find("</think>", start)
+                end = self.buffer.find(self.end_tag, start) # Search after the start tag
                 if end == -1:
-                    # No end tag yet, keep in buffer
+                    # No end tag yet, keep in buffer (if buffer isn't excessively large)
+                    if len(self.buffer) > (len(self.start_tag) + 4096): # Heuristic to prevent runaway buffer with unclosed tags
+                        # This case implies a very long segment without an end tag.
+                        # We might decide to flush part of it if it's not the start_tag itself.
+                        # For now, break and wait for more data or flush.
+                        pass # Keep in buffer
                     break
                 
                 # Remove the complete think tag and its content
-                end += len("</think>")
+                end += len(self.end_tag)
                 self.buffer = self.buffer[end:]
             
             return output.encode("utf-8") if output else b""
@@ -273,7 +302,9 @@ def proxy(path):
         # For non-streaming responses, return the full content
         content = g.api_response.content
         decoded = content.decode("utf-8", errors="replace")
-        filtered = re.sub(r'<think>.*?</think>', '', decoded, flags=re.DOTALL)
+        # Use effective_think_start_tag and effective_think_end_tag defined earlier in the proxy function
+        think_pattern = f"{re.escape(effective_think_start_tag)}.*?{re.escape(effective_think_end_tag)}"
+        filtered = re.sub(think_pattern, '', decoded, flags=re.DOTALL)
         logger.debug(f"Non-streaming response content: {filtered}")
         return Response(
             filtered.encode("utf-8"),
@@ -284,33 +315,47 @@ def proxy(path):
     else:
         # Stream the filtered response back to the client
         def generate_filtered_response():
-            buffer = StreamBuffer()
+            buffer = StreamBuffer(effective_think_start_tag, effective_think_end_tag)
+            client_disconnected = False
             try:
-                # Set initial connection state
-                request.is_closed = False
+                for chunk in g.api_response.iter_content(chunk_size=8192):
+                    # The act of trying to yield to a disconnected client will typically
+                    # raise GeneratorExit or a socket error, caught below.
+                    
+                    output = buffer.process_chunk(chunk)
+                    if output:
+                        logger.debug(f"Streaming chunk: {output.decode('utf-8', errors='replace')}")
+                        yield output
                 
-                while not getattr(request, 'is_closed', False):
-                    try:
-                        for chunk in g.api_response.iter_content(chunk_size=8192):
-                            if getattr(request, 'is_closed', False):
-                                logger.info("Request closed, stopping chunk generation")
-                                return
-                            
-                            output = buffer.process_chunk(chunk)
-                            if output:
-                                logger.debug(f"Streaming chunk: {output.decode('utf-8', errors='replace')}")
-                                yield output
-                    except (GeneratorExit, ConnectionError):
-                        logger.info("Client disconnected")
-                        request.is_closed = True
-                        return
-            finally:
-                # Flush any remaining content if we still have an active connection
-                if not getattr(request, 'is_closed', False):
+                # After the loop, if the client is still considered connected, flush the buffer
+                # (client_disconnected flag will be true if the except block was hit)
+                if not client_disconnected:
                     final_output = buffer.flush()
                     if final_output:
-                        logger.debug(f"Final streaming chunk: {final_output.decode('utf-8', errors='replace')}")
+                        logger.debug(f"Final streaming chunk after loop: {final_output.decode('utf-8', errors='replace')}")
                         yield final_output
+                        
+            except (GeneratorExit, ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+                # Catching common errors indicating client disconnect or stream interruption
+                logger.warning(f"Client disconnected or stream error during generation: {type(e).__name__} - {str(e)}")
+                client_disconnected = True # Mark as disconnected
+                # Optionally, re-raise if specific handling is needed by Flask/Gunicorn,
+                # but often just returning is enough to stop the generator.
+                # For now, we'll just log and stop.
+            except requests.exceptions.RequestException as e:
+                # Catch other requests-related errors during streaming
+                logger.error(f"Requests exception during streaming: {type(e).__name__} - {str(e)}")
+                client_disconnected = True
+            except Exception as e:
+                # Catch any other unexpected errors during streaming
+                logger.error(f"Unexpected error during streaming: {type(e).__name__} - {str(e)}", exc_info=True)
+                client_disconnected = True
+            finally:
+                # Ensure the downstream response is closed, especially if an error occurred.
+                # The teardown_request will also attempt this, but good for safety here too.
+                if hasattr(g, 'api_response') and g.api_response:
+                    g.api_response.close()
+                    logger.debug("Downstream API response closed in generate_filtered_response finally block.")
 
         # Log response details
         logger.debug(f"Response status: {g.api_response.status_code}")

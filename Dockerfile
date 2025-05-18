@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Expose the application port
-EXPOSE 5000
+EXPOSE 3000
 
 # Set default environment variables
 ENV DEBUG=false
