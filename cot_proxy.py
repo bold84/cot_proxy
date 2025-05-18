@@ -37,6 +37,60 @@ PARAM_TYPES = {
     'mirostat': bool,         # Use Mirostat sampling
 }
 
+# Buffer for handling think tags across chunks
+class StreamBuffer:
+    def __init__(self, start_tag, end_tag):
+        self.buffer = ""
+        self.start_tag = start_tag
+        self.end_tag = end_tag
+        
+    def process_chunk(self, chunk):
+        # Decode and add to buffer
+        decoded_chunk = chunk.decode("utf-8", errors="replace")
+        self.buffer += decoded_chunk
+        
+        output = ""
+        
+        while True:
+            # Find the next potential tag start
+            start = self.buffer.find(self.start_tag)
+            
+            if start == -1:
+                # No more think tags, output all except last few chars
+                if len(self.buffer) > 1024: # Keep some buffer for potential partial tags at the very end
+                    output += self.buffer[:-1024]
+                    self.buffer = self.buffer[-1024:]
+                break
+            
+            # Output content before the tag
+            if start > 0:
+                output += self.buffer[:start]
+                self.buffer = self.buffer[start:]
+                start = 0  # Tag is now at start of buffer
+            
+            # Look for end tag
+            end = self.buffer.find(self.end_tag, start) # Search after the start tag
+            if end == -1:
+                # No end tag yet, keep in buffer (if buffer isn't excessively large)
+                if len(self.buffer) > (len(self.start_tag) + 4096): # Heuristic to prevent runaway buffer with unclosed tags
+                    # This case implies a very long segment without an end tag.
+                    # We might decide to flush part of it if it's not the start_tag itself.
+                    # For now, break and wait for more data or flush.
+                    pass # Keep in buffer
+                break
+            
+            # Remove the complete think tag and its content
+            end += len(self.end_tag)
+            self.buffer = self.buffer[end:]
+        
+        return output.encode("utf-8") if output else b""
+        
+    def flush(self):
+        # Output remaining content
+        output = self.buffer
+        self.buffer = ""
+        return output.encode("utf-8")
+
 def convert_param_value(key: str, value: str) -> Any:
     """Convert parameter value to appropriate type based on parameter name."""
     if not value or value.lower() == 'null':
@@ -127,59 +181,81 @@ def proxy(path):
     logger.debug(f"Forwarding {request.method} request to: {target_url}")
     logger.debug(f"Headers: {headers}")
     
+    # Initialize effective_think_start_tag and effective_think_end_tag to global defaults
+    # These will be used by the streaming/non-streaming response handlers.
+    # They might be updated if json_body and LLM_PARAMS are processed.
+    effective_think_start_tag = DEFAULT_THINK_START_TAG
+    effective_think_end_tag = DEFAULT_THINK_END_TAG
+    target_model_for_log = 'default' # For logging if no model in request
+
     try:
         # Get JSON body if present
         json_body = request.get_json(silent=True) if request.is_json else None
         logger.debug(f"Request JSON body: {json_body}")
         
-        # Apply model-specific LLM parameter overrides from environment
-        if json_body and (llm_params := os.getenv('LLM_PARAMS')):
-            # Parse model configurations: "model=MODEL1,param1=val1,param2=val2;model=MODEL2,param3=val3"
-            model_configs = {}
-            for model_entry in llm_params.split(';'):
-                model_entry = model_entry.strip()
-                if not model_entry or not model_entry.startswith('model='):
-                    continue
+        if json_body:
+            target_model_for_log = json_body.get('model', 'default') # Update for logging
+            # Apply model-specific LLM parameter overrides from environment
+            if llm_params := os.getenv('LLM_PARAMS'):
+                # Parse model configurations: "model=MODEL1,param1=val1,param2=val2;model=MODEL2,param3=val3"
+                model_configs = {}
+                for model_entry in llm_params.split(';'):
+                    model_entry = model_entry.strip()
+                    if not model_entry or not model_entry.startswith('model='):
+                        continue
+                    
+                    # Split into model declaration and parameters
+                    parts = model_entry.split(',')
+                    model_name = parts[0].split('=', 1)[1].strip()
+                    model_configs[model_name] = {}
+                    
+                    # Process parameters after model declaration
+                    for param in parts[1:]:
+                        param = param.strip()
+                        if '=' in param:
+                            key, value = param.split('=', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            if key in ['think_tag_start', 'think_tag_end']:
+                                model_configs[model_name][key] = value # Store as raw string
+                            else:
+                                model_configs[model_name][key] = convert_param_value(key, value)
                 
-                # Split into model declaration and parameters
-                parts = model_entry.split(',')
-                model_name = parts[0].split('=', 1)[1].strip()
-                model_configs[model_name] = {}
-                
-                # Process parameters after model declaration
-                for param in parts[1:]:
-                    param = param.strip()
-                    if '=' in param:
-                        key, value = param.split('=', 1)
-                        key = key.strip()
-                        value = value.strip()
-                        if key in ['think_tag_start', 'think_tag_end']:
-                            model_configs[model_name][key] = value # Store as raw string
-                        else:
-                            model_configs[model_name][key] = convert_param_value(key, value)
-            
-            # Get target model from request
-            target_model = json_body.get('model')
+                # Get target model from request (already got for target_model_for_log)
+                current_target_model = json_body.get('model')
 
-            # Determine effective think tags
-            effective_think_start_tag = DEFAULT_THINK_START_TAG
-            effective_think_end_tag = DEFAULT_THINK_END_TAG
+                if current_target_model and current_target_model in model_configs:
+                    model_specific_config = model_configs[current_target_model]
+                    effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
+                    effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
+                    
+                    logger.debug(f"Applying LLM parameters for model: {current_target_model}")
+                    for key, value in model_specific_config.items():
+                        if key not in ['think_tag_start', 'think_tag_end']: # Exclude think tags from being sent to LLM
+                            json_body[key] = value
+                            logger.debug(f"Overriding LLM parameter: {key} = {value}")
+                elif current_target_model: # Model in request, but no specific config in LLM_PARAMS
+                    logger.debug(f"No specific LLM_PARAMS configuration found for model: {current_target_model}. Using default think tags.")
+                # If no current_target_model in json_body, effective tags remain global defaults.
+                # If LLM_PARAMS has a "default" config, it might apply if current_target_model is None
+                # and the logic for 'target_model or default' is used for param overrides (currently not for overrides, only for log).
+                # The current logic: if json_body.get('model') is None, no specific model_specific_config is found.
+                # If a "default" model config exists in LLM_PARAMS and no model is in request,
+                # it should ideally pick up "default" config for overrides too.
+                # Let's adjust to check for "default" config if no model in request.
+                elif "default" in model_configs and not current_target_model : # No model in request, but "default" config exists
+                    model_specific_config = model_configs["default"]
+                    effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
+                    effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
+                    target_model_for_log = 'default' # Explicitly for log
+                    logger.debug(f"Applying LLM parameters for 'default' model configuration (no model in request).")
+                    for key, value in model_specific_config.items():
+                        if key not in ['think_tag_start', 'think_tag_end']:
+                            json_body[key] = value # Apply to the original json_body
+                            logger.debug(f"Overriding LLM parameter for 'default': {key} = {value}")
 
-            if target_model and target_model in model_configs:
-                model_specific_config = model_configs[target_model]
-                effective_think_start_tag = model_specific_config.get('think_tag_start', DEFAULT_THINK_START_TAG)
-                effective_think_end_tag = model_specific_config.get('think_tag_end', DEFAULT_THINK_END_TAG)
-                
-                logger.debug(f"Applying LLM parameters for model: {target_model}")
-                for key, value in model_specific_config.items():
-                    if key not in ['think_tag_start', 'think_tag_end']: # Exclude think tags from being sent to LLM
-                        json_body[key] = value
-                        logger.debug(f"Overriding LLM parameter: {key} = {value}")
-            elif target_model:
-                logger.debug(f"No specific LLM_PARAMS configuration found for model: {target_model}. Using default think tags.")
-            # If no target_model, default think tags are already set
 
-            logger.info(f"Using think tags for model '{target_model or 'default'}': START='{effective_think_start_tag}', END='{effective_think_end_tag}'")
+        logger.info(f"Using think tags for model '{target_model_for_log}': START='{effective_think_start_tag}', END='{effective_think_end_tag}'")
         
         # Try to connect with a timeout
         try:
@@ -240,60 +316,6 @@ def proxy(path):
             content_type="application/json"
         )
 
-    # Buffer for handling think tags across chunks
-    class StreamBuffer:
-        def __init__(self, start_tag, end_tag):
-            self.buffer = ""
-            self.start_tag = start_tag
-            self.end_tag = end_tag
-            
-        def process_chunk(self, chunk):
-            # Decode and add to buffer
-            decoded_chunk = chunk.decode("utf-8", errors="replace")
-            self.buffer += decoded_chunk
-            
-            output = ""
-            
-            while True:
-                # Find the next potential tag start
-                start = self.buffer.find(self.start_tag)
-                
-                if start == -1:
-                    # No more think tags, output all except last few chars
-                    if len(self.buffer) > 1024: # Keep some buffer for potential partial tags at the very end
-                        output += self.buffer[:-1024]
-                        self.buffer = self.buffer[-1024:]
-                    break
-                
-                # Output content before the tag
-                if start > 0:
-                    output += self.buffer[:start]
-                    self.buffer = self.buffer[start:]
-                    start = 0  # Tag is now at start of buffer
-                
-                # Look for end tag
-                end = self.buffer.find(self.end_tag, start) # Search after the start tag
-                if end == -1:
-                    # No end tag yet, keep in buffer (if buffer isn't excessively large)
-                    if len(self.buffer) > (len(self.start_tag) + 4096): # Heuristic to prevent runaway buffer with unclosed tags
-                        # This case implies a very long segment without an end tag.
-                        # We might decide to flush part of it if it's not the start_tag itself.
-                        # For now, break and wait for more data or flush.
-                        pass # Keep in buffer
-                    break
-                
-                # Remove the complete think tag and its content
-                end += len(self.end_tag)
-                self.buffer = self.buffer[end:]
-            
-            return output.encode("utf-8") if output else b""
-            
-        def flush(self):
-            # Output remaining content
-            output = self.buffer
-            self.buffer = ""
-            return output.encode("utf-8")
-
     # Check if response should be streamed
     is_stream = json_body.get('stream', False) if json_body else False
     logger.debug(f"Stream mode: {is_stream}")
@@ -336,9 +358,10 @@ def proxy(path):
                         yield final_output
                         
             except (GeneratorExit, ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
-                # Catching common errors indicating client disconnect or stream interruption
-                logger.warning(f"Client disconnected or stream error during generation: {type(e).__name__} - {str(e)}")
-                client_disconnected = True # Mark as disconnected
+                # Only log if it's not a GeneratorExit (which is a normal stream closure)
+                if not isinstance(e, GeneratorExit):
+                    logger.warning(f"Client disconnected or stream error during generation: {type(e).__name__} - {str(e)}")
+                client_disconnected = True
                 # Optionally, re-raise if specific handling is needed by Flask/Gunicorn,
                 # but often just returning is enough to stop the generator.
                 # For now, we'll just log and stop.
@@ -350,12 +373,12 @@ def proxy(path):
                 # Catch any other unexpected errors during streaming
                 logger.error(f"Unexpected error during streaming: {type(e).__name__} - {str(e)}", exc_info=True)
                 client_disconnected = True
-            finally:
-                # Ensure the downstream response is closed, especially if an error occurred.
-                # The teardown_request will also attempt this, but good for safety here too.
-                if hasattr(g, 'api_response') and g.api_response:
-                    g.api_response.close()
-                    logger.debug("Downstream API response closed in generate_filtered_response finally block.")
+            # finally:
+            #     # Ensure the downstream response is closed, especially if an error occurred.
+            #     # The teardown_request will also attempt this, but good for safety here too.
+            #     if hasattr(g, 'api_response') and g.api_response:
+            #         g.api_response.close()
+            #         logger.debug("Downstream API response closed in generate_filtered_response finally block.")
 
         # Log response details
         logger.debug(f"Response status: {g.api_response.status_code}")
