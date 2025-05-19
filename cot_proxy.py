@@ -3,6 +3,8 @@ import requests
 import re
 import os
 import logging
+import json
+import time
 from typing import Any
 from urllib.parse import urljoin
 import re # Ensure re is available for escaping
@@ -365,10 +367,48 @@ def proxy(path):
     logger.debug(f"Stream mode: {is_stream}")
     
     if not is_stream:
-        # For non-streaming responses, return the full content
         content = g.api_response.content
         decoded = content.decode("utf-8", errors="replace")
         
+        # Check if this is a model list request
+        if path in ['models', 'v1/models']:
+            try:
+                # Attempt to parse the JSON response
+                models_data = json.loads(decoded)
+
+                # Extract pseudo models from LLM_PARAMS
+                pseudo_models = []
+                llm_params = os.getenv('LLM_PARAMS', '')
+                if llm_params:
+                    for model_entry in llm_params.split(';'):
+                        model_entry = model_entry.strip()
+                        if not model_entry or not model_entry.startswith('model='):
+                            continue
+                        parts = model_entry.split(',')
+                        model_name = parts[0].split('=', 1)[1].strip()
+
+                        # Create a pseudo model entry in OpenAI-like format
+                        pseudo_model = {
+                            'id': model_name,
+                            'object': 'model',
+                            'created': int(time.time()),
+                            'owned_by': 'organization-owner'
+                        }
+                        pseudo_models.append(pseudo_model)
+
+                    # Merge pseudo models into the 'data' array if it exists
+                    if 'data' in models_data:
+                        models_data['data'].extend(pseudo_models)
+                    else:
+                        models_data['data'] = pseudo_models
+
+                # Re-encode the JSON response
+                decoded = json.dumps(models_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse model list response: {e}")
+            except Exception as e:
+                logger.error(f"Error processing model list: {e}")
+
         # Conditional filtering based on enable_think_tag_filtering
         if enable_think_tag_filtering:
             # Use effective_think_start_tag and effective_think_end_tag defined earlier in the proxy function
@@ -376,7 +416,7 @@ def proxy(path):
             filtered = re.sub(think_pattern, '', decoded, flags=re.DOTALL)
         else:
             filtered = decoded  # Skip filtering
-        
+
         logger.debug(f"Non-streaming response content: {filtered}")
         return Response(
             filtered.encode("utf-8"),
