@@ -280,12 +280,11 @@ def proxy(path):
                             json_body[key] = value
                             logger.debug(f"Overriding LLM parameter for 'default': {key} = {value}")
 
-
         logger.info(f"Using think tags for model '{target_model_for_log}': START='{effective_think_start_tag}', END='{effective_think_end_tag}'")
         logger.info(f"Think tag filtering enabled: {enable_think_tag_filtering} for model '{target_model_for_log}'")
         
         append_string = model_specific_config.get('append_to_last_user_message')
-        if append_string:
+        if append_string and json_body: # Ensure json_body exists
             if 'messages' not in json_body or not json_body['messages']:
                 # No messages: create a new user message with the string
                 json_body.setdefault('messages', [])
@@ -293,15 +292,43 @@ def proxy(path):
                 logger.debug(f"Created new user message with content: {append_string}")
             else:
                 # Find the last message to append to
-                last_message = json_body['messages'][-1]
-                if last_message.get('role') == 'user':
-                    last_message['content'] += append_string
-                    logger.debug(f"Appended to existing user message: {append_string}")
-                else:
-                    # Last message is not user: insert a new user message
+                if json_body['messages']: # Ensure messages list is not empty
+                    last_message = json_body['messages'][-1]
+                    if last_message.get('role') == 'user':
+                        if isinstance(last_message.get('content'), str):
+                            last_message['content'] += append_string
+                            logger.debug(f"Appended to existing user message (string content): {append_string}")
+                        elif isinstance(last_message.get('content'), list):
+                            content_list = last_message['content']
+                            appended_to_existing_text_part = False
+                            # Iterate backwards to find the last text part to append to
+                            # This handles cases like a list of text and image parts.
+                            for i in range(len(content_list) - 1, -1, -1):
+                                part = content_list[i]
+                                if isinstance(part, dict) and part.get('type') == 'text' and 'text' in part:
+                                    part['text'] += append_string
+                                    appended_to_existing_text_part = True
+                                    logger.debug(f"Appended to last text part of user message content list: {append_string}")
+                                    break
+                            
+                            if not appended_to_existing_text_part:
+                                # If no suitable text part was found (e.g. list of images, or empty list),
+                                # add a new text part.
+                                content_list.append({'type': 'text', 'text': append_string})
+                                logger.debug(f"Added new text part to user message content list: {append_string}")
+                        else:
+                            # Content is not a string or list (e.g., None or unexpected type)
+                            # Set the content to the append_string.
+                            original_content_type = type(last_message.get('content')).__name__
+                            last_message['content'] = append_string
+                            logger.warning(f"Last user message content was '{original_content_type}'. Overwritten with new string content: {append_string}")
+                    else:
+                        # Last message is not user: insert a new user message
+                        json_body['messages'].append({"role": "user", "content": append_string})
+                        logger.debug(f"Last message not 'user'. Inserted new user message with content: {append_string}")
+                else: # messages list is empty
                     json_body['messages'].append({"role": "user", "content": append_string})
-                    logger.debug(f"Inserted new user message with content: {append_string}")
-        
+                    logger.debug(f"Messages list was empty. Created new user message with content: {append_string}")
         
         # Try to connect with a timeout
         try:
