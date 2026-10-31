@@ -238,4 +238,66 @@ def test_proxy_non_streaming_no_json_body(client, mocker, caplog, enable_debug):
     # it decodes g.api_response.content.
     # The `effective_think_start_tag` would be the global defaults in this case.
     # So, if the response *did* contain default tags, they *would* be stripped.
-    
+
+
+@responses.activate
+def test_proxy_non_streaming_think_filter_does_not_match_across_json_fields(client, mocker):
+    """Think markers in different JSON fields must not delete the fields between them."""
+    mocked_target_base = "http://fake-target-nonstream/"
+    mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=nonstream-model,enable_think_tag_filtering=true"
+    }, clear=True)
+    mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
+    mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
+    target_response_content = {
+        "choices": [{"message": {
+            "role": "assistant",
+            "content": "prefix <think>hidden",
+            "reasoning_content": "x</think> suffix",
+            "other": "kept",
+        }}]
+    }
+    responses.add(
+        responses.POST,
+        f"{mocked_target_base}v1/chat/completions",
+        json=target_response_content,
+        status=200,
+        content_type="application/json"
+    )
+    request_body = {"model": "nonstream-model", "stream": False, "messages": [{"role": "user", "content": "Hello"}]}
+    proxy_response = client.post("/v1/chat/completions", json=request_body)
+    assert proxy_response.status_code == 200
+    message = proxy_response.json["choices"][0]["message"]
+    assert message["content"] == "prefix <think>hidden"
+    assert message["reasoning_content"] == "x</think> suffix"
+    assert message["other"] == "kept"
+
+
+@responses.activate
+def test_proxy_non_streaming_think_filter_inside_json_content(client, mocker):
+    """A think pair inside one message content string is still removed from JSON."""
+    mocked_target_base = "http://fake-target-nonstream/"
+    mocker.patch('cot_proxy.TARGET_BASE_URL', mocked_target_base)
+    mocker.patch.dict(os.environ, {
+        "LLM_PARAMS": "model=nonstream-model,enable_think_tag_filtering=true"
+    }, clear=True)
+    mocker.patch('cot_proxy.DEFAULT_THINK_START_TAG', DEFAULT_CODE_START_TAG)
+    mocker.patch('cot_proxy.DEFAULT_THINK_END_TAG', DEFAULT_CODE_END_TAG)
+    target_response_content = {
+        "choices": [{"message": {
+            "role": "assistant",
+            "content": "Visible <think>secret thoughts</think> content.",
+        }}]
+    }
+    responses.add(
+        responses.POST,
+        f"{mocked_target_base}v1/chat/completions",
+        json=target_response_content,
+        status=200,
+        content_type="application/json"
+    )
+    request_body = {"model": "nonstream-model", "stream": False, "messages": [{"role": "user", "content": "Hello"}]}
+    proxy_response = client.post("/v1/chat/completions", json=request_body)
+    assert proxy_response.status_code == 200
+    assert proxy_response.json["choices"][0]["message"]["content"] == "Visible  content."

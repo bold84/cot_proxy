@@ -111,6 +111,27 @@ def convert_param_value(key: str, value: str) -> Any:
         logger.warning(f"Failed to convert parameter '{key}' value '{value}' to {param_type.__name__}")
         return value
 
+def filter_think_tags_in_json(decoded, think_pattern):
+    # Filter inside message content only, so markers cannot match across JSON fields.
+    try:
+        data = json.loads(decoded)
+    except (json.JSONDecodeError, ValueError):
+        return re.sub(think_pattern, '', decoded, flags=re.DOTALL)
+    if not isinstance(data, dict) or not isinstance(data.get("choices"), list):
+        return re.sub(think_pattern, '', decoded, flags=re.DOTALL)
+    changed = False
+    for choice in data["choices"]:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            filtered_content = re.sub(think_pattern, '', message["content"], flags=re.DOTALL)
+            if filtered_content != message["content"]:
+                message["content"] = filtered_content
+                changed = True
+    return json.dumps(data) if changed else decoded
+
+
 app = Flask(__name__)
 
 @app.teardown_request
@@ -438,9 +459,8 @@ def proxy(path):
 
         # Conditional filtering based on enable_think_tag_filtering
         if enable_think_tag_filtering:
-            # Use effective_think_start_tag and effective_think_end_tag defined earlier in the proxy function
             think_pattern = f"{re.escape(effective_think_start_tag)}.*?{re.escape(effective_think_end_tag)}"
-            filtered = re.sub(think_pattern, '', decoded, flags=re.DOTALL)
+            filtered = filter_think_tags_in_json(decoded, think_pattern)
         else:
             filtered = decoded  # Skip filtering
 
