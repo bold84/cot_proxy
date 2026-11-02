@@ -6,7 +6,7 @@ import logging
 import json
 import time
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import re # Ensure re is available for escaping
 
 # Global default think tags
@@ -157,6 +157,64 @@ if not TARGET_BASE_URL.endswith('/'):
 logger.debug(f"Starting proxy with target URL: {TARGET_BASE_URL}")
 logger.debug(f"Debug mode: {log_level == logging.DEBUG}")
 
+# Maximum upstream redirects followed for a single proxied request.
+MAX_UPSTREAM_REDIRECTS = 5
+
+_REDIRECT_STATUSES = (301, 302, 303, 307, 308)
+
+
+def _is_pinned_target(url):
+    """True when url points at the configured upstream host.
+
+    Only http(s) URLs whose host (including port) matches TARGET_BASE_URL
+    are fetched. This keeps a client-supplied absolute URL in the path, or
+    an upstream redirect, from turning the proxy into an open fetcher.
+    """
+    try:
+        target = urlparse(url)
+        base = urlparse(TARGET_BASE_URL)
+    except ValueError:
+        return False
+    return (
+        target.scheme in ("http", "https")
+        and target.netloc.lower() == base.netloc.lower()
+    )
+
+
+def _fetch_pinned(method, url, headers, json_body, timeout):
+    """Fetch url without following redirects off the pinned host.
+
+    Redirects to the same upstream host are followed (up to
+    MAX_UPSTREAM_REDIRECTS); a redirect elsewhere is returned as-is, so
+    the caller sees the redirect but the proxy never fetches it.
+    """
+    current_url = url
+    current_method = method
+    current_body = json_body
+    response = None
+    for _ in range(MAX_UPSTREAM_REDIRECTS + 1):
+        response = requests.request(
+            method=current_method,
+            url=current_url,
+            headers=headers,
+            json=current_body,
+            stream=True,
+            timeout=timeout,
+            verify=True,  # Verify SSL certificates
+            allow_redirects=False,
+        )
+        location = response.headers.get("Location")
+        if response.status_code not in _REDIRECT_STATUSES or not location:
+            return response
+        next_url = urljoin(current_url, location)
+        if not _is_pinned_target(next_url):
+            return response
+        current_url = next_url
+        if response.status_code == 303:
+            current_method = "GET"
+            current_body = None
+    return response
+
 @app.route('/health')
 def health_check():
     try:
@@ -199,6 +257,15 @@ def proxy(path):
     # Forward query parameters from the original request
     if request.query_string:
         target_url += f"?{request.query_string.decode()}"
+
+    # Pin the fetch to the configured upstream host: a client-supplied
+    # absolute URL in the path must not turn the proxy into an open fetcher.
+    if not _is_pinned_target(target_url):
+        return Response(
+            response='{"error": "URL outside configured target host"}',
+            status=400,
+            content_type="application/json"
+        )
 
     # Log request details
     logger.debug(f"Forwarding {request.method} request to: {target_url}")
@@ -353,15 +420,14 @@ def proxy(path):
         
         # Try to connect with a timeout
         try:
-            # Store response in Flask's request context
-            g.api_response = requests.request(
+            # Store response in Flask's request context. Redirects are
+            # followed only while they stay on the pinned upstream host.
+            g.api_response = _fetch_pinned(
                 method=request.method,
                 url=target_url,
                 headers=headers,
-                json=json_body,
-                stream=True,
+                json_body=json_body,
                 timeout=int(os.getenv('API_REQUEST_TIMEOUT', 120)),  # Timeout in seconds, default 120
-                verify=True  # Verify SSL certificates
             )
             logger.debug(f"Connected to target URL: {target_url}")
             logger.debug(f"Target response time: {g.api_response.elapsed.total_seconds()}s")
